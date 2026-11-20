@@ -1,4 +1,4 @@
-"""sync_campaign: the local copy of a campaign follows Keitaro (import, refresh, discard).
+"""sync_campaign: the local copy of a campaign follows Keitaro (import and refresh).
 
 Keitaro is mocked with respx; the database is the real PostgreSQL test database (tests/conftest.py).
 The fake tracker below holds the current state, so a test can change it between two syncs.
@@ -316,7 +316,7 @@ async def test_stream_that_stops_carrying_offers_loses_its_offer_rows(
     assert await stream_offers(session, DE_STREAM) == []
 
 
-async def test_unpushed_changes_block_sync_without_force(
+async def test_unpushed_changes_block_sync(
     session: AsyncSession, keitaro: KeitaroClient, tracker: FakeKeitaro
 ) -> None:
     await sync_campaign(session, keitaro, CAMPAIGN_ID, now=T1)
@@ -336,23 +336,23 @@ async def test_unpushed_changes_block_sync_without_force(
     assert campaign.synced_at == T1
 
 
-async def test_force_discards_unpushed_changes(
+async def test_sync_saves_the_state_of_every_row(
     session: AsyncSession, keitaro: KeitaroClient, tracker: FakeKeitaro
 ) -> None:
     await sync_campaign(session, keitaro, CAMPAIGN_ID, now=T1)
-    stream: Stream | None = await session.get(Stream, DE_STREAM)
-    assert stream is not None
-    stream.has_unpushed_changes = True
-    (await get_row(session, DE_STREAM, OFFER_B)).status = OfferStatus.REMOVED
-    (await get_row(session, DE_STREAM, OFFER_A)).share = 100
+    pinned: StreamOffer = await get_row(session, DE_STREAM, OFFER_A)
+    pinned.is_pinned = True
+    tracker.set_offers(DE_STREAM, [(OFFER_A, 100)])
     await session.flush()
 
-    await sync_campaign(session, keitaro, CAMPAIGN_ID, force=True, now=T2)
+    await sync_campaign(session, keitaro, CAMPAIGN_ID, now=T2)
 
-    assert stream.has_unpushed_changes is False
-    assert rows(await stream_offers(session, DE_STREAM)) == [
-        (OFFER_A, 50, OfferStatus.ACTIVE, 0, False),
-        (OFFER_B, 50, OfferStatus.ACTIVE, 1, False),
+    assert [
+        (row.offer_id, row.saved_share, row.saved_status, row.saved_position, row.saved_is_pinned)
+        for row in await stream_offers(session, DE_STREAM)
+    ] == [
+        (OFFER_A, 100, OfferStatus.ACTIVE, 0, True),
+        (OFFER_B, 50, OfferStatus.MISSING, 1, False),
     ]
 
 

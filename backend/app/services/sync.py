@@ -13,22 +13,17 @@ from app.models import Campaign, Offer, OfferStatus, Stream, StreamOffer
 
 
 class UnpushedChangesError(Exception):
-    """The campaign has unpushed edits; syncing without `force` would erase them."""
+    """The campaign has unpushed edits; syncing would erase them."""
 
 
 async def sync_campaign(
-    session: AsyncSession,
-    keitaro: KeitaroClient,
-    campaign_id: int,
-    *,
-    force: bool = False,
-    now: datetime,
+    session: AsyncSession, keitaro: KeitaroClient, campaign_id: int, *, now: datetime
 ) -> Campaign:
     """Bring the local copy of a campaign to the state it has in Keitaro.
 
-    One function for three cases: import (the campaign is not in the database yet), "refresh from
-    Keitaro" (`force=False`, refuses when there are unpushed edits) and "discard changes"
-    (`force=True`, unpushed edits are overwritten).
+    Used for import (the campaign is not in the database yet) and for "refresh from Keitaro".
+    Refuses when there are unpushed edits: those are pushed or discarded first. The result is
+    remembered as the saved state of every offer row.
 
     Keitaro is read completely before the database is touched, so a Keitaro error leaves the
     database as it was. Shares are taken from Keitaro as they are, not recalculated. The function
@@ -36,7 +31,7 @@ async def sync_campaign(
 
     Raises:
         KeitaroError: Keitaro could not be read.
-        UnpushedChangesError: there are unpushed edits and `force` is off.
+        UnpushedChangesError: there are unpushed edits.
     """
     remote_campaign: km.Campaign = await keitaro.get_campaign(campaign_id)
     remote_streams: list[km.Stream] = await keitaro.get_streams(campaign_id)
@@ -53,7 +48,7 @@ async def sync_campaign(
             id=campaign_id, name=remote_campaign.name, synced_at=now, streams=[]
         )
         session.add(local_campaign)
-    elif not force and any(stream.has_unpushed_changes for stream in local_campaign.streams):
+    elif any(stream.has_unpushed_changes for stream in local_campaign.streams):
         raise UnpushedChangesError(f"campaign {campaign_id} has unpushed changes")
     local_campaign.name = remote_campaign.name
     local_campaign.synced_at = now
@@ -114,7 +109,8 @@ def _sync_stream_offers(local_stream: Stream, remote_offers: Sequence[km.StreamO
 
     Offers present in Keitaro become active with Keitaro's share and order; a pin set in the
     wrapper is kept. An active offer gone from Keitaro becomes missing; removed and missing offers
-    keep their status and last share. Inactive offers go after the active ones.
+    keep their status and last share. Inactive offers go after the active ones. The result is
+    saved as the state "discard changes" returns to.
     """
     local_rows: dict[int, StreamOffer] = {row.offer_id: row for row in local_stream.offers}
     remote_offer_ids: set[int] = {remote_offer.offer_id for remote_offer in remote_offers}
@@ -139,4 +135,6 @@ def _sync_stream_offers(local_stream: Stream, remote_offers: Sequence[km.StreamO
         row.position = position
         synced_rows.append(row)
 
+    for row in synced_rows:
+        row.save_state()
     local_stream.offers = synced_rows
