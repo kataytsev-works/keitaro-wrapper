@@ -1,0 +1,14 @@
+.env
+.env.*
+!.env.example
+
+# Python
+.venv/
+__pycache__/
+.ruff_cache/
+.mypy_cache/
+.pytest_cache/
+
+# Frontend
+node_modules/
+dist/
