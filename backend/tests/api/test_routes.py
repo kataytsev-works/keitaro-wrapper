@@ -115,6 +115,9 @@ def tracker() -> Iterator[FakeKeitaro]:
             ]
         )
         api.put(path__regex=r"/streams/(?P<stream_id>\d+)").mock(side_effect=put_stream)
+        api.get("/domains").respond(json=[{"id": 7, "name": "track.test"}])
+        api.get("/groups", params={"type": "campaigns"}).respond(json=[{"id": 3, "name": "TESTS"}])
+        api.get("/traffic_sources").respond(json=[{"id": 5, "name": "SOURCE"}])
         api.post("/report/build").respond(
             json={
                 "rows": [
@@ -357,6 +360,55 @@ async def test_stats_are_mapped_per_flow_and_offer(client: httpx.AsyncClient) ->
             "revenue": 3.5,
         }
     ]
+
+
+async def test_creator_options_come_from_keitaro(client: httpx.AsyncClient) -> None:
+    response: httpx.Response = await client.get("/api/creator/options")
+
+    assert response.status_code == 200
+    assert response.json() == {
+        "domains": [{"id": 7, "name": "track.test"}],
+        "groups": [{"id": 3, "name": "TESTS"}],
+        "traffic_sources": [{"id": 5, "name": "SOURCE"}],
+        "offers": [{"id": A, "name": "Offer A"}, {"id": E, "name": "Offer E"}],
+    }
+
+
+CREATE_BODY: Final[dict[str, object]] = {
+    "name": "New campaign",
+    "countries": ["AU"],
+    "offer_id": A,
+    "domain_id": 7,
+    "group_id": 3,
+    "traffic_source_id": 5,
+}
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        pytest.param({"name": "   "}, id="blank name"),
+        pytest.param({"countries": []}, id="no countries"),
+        pytest.param({"countries": ["au"]}, id="lower case code"),
+        pytest.param({"countries": ["AUS"]}, id="three letters"),
+        pytest.param({"offer_id": 0}, id="no offer"),
+    ],
+)
+async def test_create_campaign_validates_input(
+    client: httpx.AsyncClient, change: dict[str, object]
+) -> None:
+    response: httpx.Response = await client.post("/api/campaigns", json={**CREATE_BODY, **change})
+
+    assert response.status_code == 422
+
+
+async def test_create_campaign_with_unavailable_offer_is_409(client: httpx.AsyncClient) -> None:
+    response: httpx.Response = await client.post(
+        "/api/campaigns", json={**CREATE_BODY, "offer_id": 999}
+    )
+
+    assert response.status_code == 409
+    assert "999" in response.json()["detail"]
 
 
 async def test_stats_reject_unknown_period(client: httpx.AsyncClient) -> None:

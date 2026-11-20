@@ -44,6 +44,27 @@ export interface Campaign extends CampaignSummary {
   streams: Stream[];
 }
 
+export interface NamedItem {
+  id: number;
+  name: string;
+}
+
+export interface CreatorOptions {
+  domains: NamedItem[];
+  groups: NamedItem[];
+  traffic_sources: NamedItem[];
+  offers: Offer[];
+}
+
+export interface NewCampaign {
+  name: string;
+  countries: string[];
+  offer_id: number;
+  domain_id: number;
+  group_id: number;
+  traffic_source_id: number;
+}
+
 export interface OfferStats {
   stream_id: number;
   offer_id: number;
@@ -97,6 +118,9 @@ export const api = {
     request<KeitaroCampaign[]>("GET", "/keitaro/campaigns"),
   offers: () => request<Offer[]>("GET", "/offers"),
   campaigns: () => request<CampaignSummary[]>("GET", "/campaigns"),
+  creatorOptions: () => request<CreatorOptions>("GET", "/creator/options"),
+  createCampaign: (data: NewCampaign) =>
+    request<Campaign>("POST", "/campaigns", data),
   campaign: (id: number) => request<Campaign>("GET", `/campaigns/${id}`),
   importCampaign: (campaignId: number) =>
     request<Campaign>("POST", "/campaigns/import", { campaign_id: campaignId }),

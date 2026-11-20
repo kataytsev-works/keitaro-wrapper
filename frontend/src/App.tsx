@@ -2,6 +2,7 @@ import { AppShell, Anchor, Container, Group, Title } from "@mantine/core";
 import { Link, Route, Routes } from "react-router";
 import { CampaignEditorPage } from "./pages/CampaignEditorPage";
 import { CampaignsPage } from "./pages/CampaignsPage";
+import { CreateCampaignPage } from "./pages/CreateCampaignPage";
 
 export default function App() {
   return (
@@ -16,6 +17,9 @@ export default function App() {
               <Anchor component={Link} to="/">
                 Кампании
               </Anchor>
+              <Anchor component={Link} to="/create">
+                Создать кампанию
+              </Anchor>
             </Group>
           </Group>
         </Container>
@@ -24,6 +28,7 @@ export default function App() {
         <Container size="xl">
           <Routes>
             <Route path="/" element={<CampaignsPage />} />
+            <Route path="/create" element={<CreateCampaignPage />} />
             <Route
               path="/campaigns/:campaignId"
               element={<CampaignEditorPage />}

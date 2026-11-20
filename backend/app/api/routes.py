@@ -13,8 +13,11 @@ from app.api.schemas import (
     AddOfferIn,
     CampaignOut,
     CampaignSummaryOut,
+    CreateCampaignIn,
+    CreatorOptionsOut,
     ImportCampaignIn,
     KeitaroCampaignOut,
+    NamedItemOut,
     OfferOut,
     OfferStatsOut,
     PinIn,
@@ -25,6 +28,7 @@ from app.keitaro.client import KeitaroError
 from app.keitaro.models import ReportInterval
 from app.models import Campaign, Stream
 from app.services import editor
+from app.services.creator import NewCampaign, create_campaign
 from app.services.editor import EditorError, NotFoundError
 from app.services.sync import sync_campaign
 
@@ -59,6 +63,43 @@ async def list_keitaro_campaigns(keitaro: KeitaroDep) -> list[KeitaroCampaignOut
 async def list_offers(keitaro: KeitaroDep) -> list[OfferOut]:
     """Offers that can be added to a flow: the ones Keitaro lets us read."""
     return [OfferOut(id=offer.id, name=offer.name) for offer in await keitaro.list_offers()]
+
+
+@router.get("/creator/options")
+async def creator_options(keitaro: KeitaroDep) -> CreatorOptionsOut:
+    """Domains, campaign groups, traffic sources and offers to pick from in the creator."""
+    domains = await keitaro.list_domains()
+    groups = await keitaro.list_campaign_groups()
+    traffic_sources = await keitaro.list_traffic_sources()
+    offers = await keitaro.list_offers()
+    return CreatorOptionsOut(
+        domains=[NamedItemOut(id=item.id, name=item.name) for item in domains],
+        groups=[NamedItemOut(id=item.id, name=item.name) for item in groups],
+        traffic_sources=[NamedItemOut(id=item.id, name=item.name) for item in traffic_sources],
+        offers=[OfferOut(id=offer.id, name=offer.name) for offer in offers],
+    )
+
+
+@router.post("/campaigns")
+async def create_new_campaign(
+    body: CreateCampaignIn, session: SessionDep, keitaro: KeitaroDep
+) -> CampaignOut:
+    """Create a campaign in Keitaro (geo flow to Google + offer flow) and open it in the wrapper."""
+    campaign = await create_campaign(
+        session,
+        keitaro,
+        NewCampaign(
+            name=body.name,
+            countries=body.countries,
+            offer_id=body.offer_id,
+            domain_id=body.domain_id,
+            group_id=body.group_id,
+            traffic_source_id=body.traffic_source_id,
+        ),
+        now=datetime.now(UTC),
+    )
+    await session.commit()
+    return await load_campaign_view(session, campaign.id)
 
 
 # --- Campaigns in the wrapper --------------------------------------------------------------------

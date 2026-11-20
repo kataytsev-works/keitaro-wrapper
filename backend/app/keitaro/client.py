@@ -15,6 +15,7 @@ from app.core.config import Settings
 from app.keitaro.models import (
     Campaign,
     CampaignCreate,
+    NamedItem,
     Offer,
     OfferStatsRow,
     ReportInterval,
@@ -38,6 +39,7 @@ type _Validator[T] = Callable[[object], T]
 _CAMPAIGNS: Final[TypeAdapter[list[Campaign]]] = TypeAdapter(list[Campaign])
 _STREAMS: Final[TypeAdapter[list[Stream]]] = TypeAdapter(list[Stream])
 _OFFERS: Final[TypeAdapter[list[Offer]]] = TypeAdapter(list[Offer])
+_NAMED_ITEMS: Final[TypeAdapter[list[NamedItem]]] = TypeAdapter(list[NamedItem])
 
 
 class KeitaroError(Exception):
@@ -117,6 +119,18 @@ class KeitaroClient:
     async def list_offers(self) -> list[Offer]:
         response: httpx.Response = await self._request("GET", "/offers")
         return _parse(response, _OFFERS.validate_python)
+
+    async def list_domains(self) -> list[NamedItem]:
+        response: httpx.Response = await self._request("GET", "/domains")
+        return _parse(response, _NAMED_ITEMS.validate_python)
+
+    async def list_campaign_groups(self) -> list[NamedItem]:
+        response: httpx.Response = await self._request("GET", "/groups?type=campaigns")
+        return _parse(response, _NAMED_ITEMS.validate_python)
+
+    async def list_traffic_sources(self) -> list[NamedItem]:
+        response: httpx.Response = await self._request("GET", "/traffic_sources")
+        return _parse(response, _NAMED_ITEMS.validate_python)
 
     async def create_campaign(self, data: CampaignCreate) -> Campaign:
         response: httpx.Response = await self._request("POST", "/campaigns", body=data)

@@ -1,9 +1,9 @@
 """Request and response bodies of the wrapper's HTTP API."""
 
 from datetime import datetime
-from typing import Literal
+from typing import Annotated, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, StringConstraints
 
 from app.models import OfferStatus
 
@@ -64,6 +64,34 @@ class OfferStatsOut(BaseModel):
 
 class ImportCampaignIn(BaseModel):
     campaign_id: int = Field(gt=0)
+
+
+type CountryCode = Annotated[str, StringConstraints(pattern=r"^[A-Z]{2}$")]
+
+
+class CreateCampaignIn(BaseModel):
+    """Creator form: name, countries for the Google flow, the offer and where the campaign lives."""
+
+    name: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=200)]
+    countries: list[CountryCode] = Field(min_length=1)
+    offer_id: int = Field(gt=0)
+    domain_id: int = Field(gt=0)
+    group_id: int = Field(gt=0)
+    traffic_source_id: int = Field(gt=0)
+
+
+class NamedItemOut(BaseModel):
+    id: int
+    name: str
+
+
+class CreatorOptionsOut(BaseModel):
+    """What the creator form offers to pick from, read from Keitaro."""
+
+    domains: list[NamedItemOut]
+    groups: list[NamedItemOut]
+    traffic_sources: list[NamedItemOut]
+    offers: list[OfferOut]
 
 
 class AddOfferIn(BaseModel):

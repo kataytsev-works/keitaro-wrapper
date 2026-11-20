@@ -67,6 +67,13 @@ class Offer(KeitaroModel):
     name: str
 
 
+class NamedItem(KeitaroModel):
+    """Domain, campaign group or traffic source: the wrapper needs only the ID and the name."""
+
+    id: int
+    name: str
+
+
 class CampaignCreate(KeitaroModel):
     """Body of `POST /campaigns`. Keitaro requires `name` and `alias`; `group_id` is a string."""
 

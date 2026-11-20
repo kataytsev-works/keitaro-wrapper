@@ -14,6 +14,7 @@ from app.api.routes import router
 from app.core.config import Settings, get_settings
 from app.core.db import build_engine, build_sessionmaker
 from app.keitaro.client import KeitaroClient, KeitaroError, build_http_client
+from app.services.creator import CreatorError
 from app.services.editor import EditorError, NotFoundError
 from app.services.sync import UnpushedChangesError
 
@@ -37,6 +38,7 @@ def create_app() -> FastAPI:
     app.include_router(router)
     app.add_exception_handler(NotFoundError, _not_found)
     app.add_exception_handler(EditorError, _conflict)
+    app.add_exception_handler(CreatorError, _conflict)
     app.add_exception_handler(UnpushedChangesError, _conflict)
     app.add_exception_handler(KeitaroError, _keitaro_failed)
     return app
