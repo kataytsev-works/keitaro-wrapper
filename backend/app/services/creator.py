@@ -43,12 +43,12 @@ async def create_campaign(
     Flows: 1) country filter = `countries` -> redirect to Google; 2) everyone else -> the offer
     with 100%. Repeated countries are sent once, in the order given. Keitaro has no transactions:
     if a flow cannot be created, the campaign just created is deleted again, so no half-made
-    campaign is left behind.
+    campaign is left behind. If only the import fails, the campaign is complete and stays.
 
     Raises:
         CreatorError: the offer is not one Keitaro lets us read.
-        KeitaroError: Keitaro refused a request. If the cleanup failed too, the message says
-            which campaign is left in Keitaro.
+        KeitaroError: Keitaro refused a request. If the cleanup failed too, or the import after
+            creation failed, the message names the campaign left in Keitaro.
     """
     readable_offer_ids: set[int] = {offer.id for offer in await keitaro.list_offers()}
     if data.offer_id not in readable_offer_ids:
@@ -91,7 +91,14 @@ async def create_campaign(
         await _delete_after_failure(keitaro, remote.id, exc)
         raise
 
-    return await sync_campaign(session, keitaro, remote.id, now=now)
+    try:
+        return await sync_campaign(session, keitaro, remote.id, now=now)
+    except KeitaroError as exc:
+        raise KeitaroError(
+            exc.status_code,
+            f"{exc.message}; campaign {remote.id} is created in Keitaro but not imported,"
+            " import it by its ID",
+        ) from exc
 
 
 def make_alias(name: str) -> str:

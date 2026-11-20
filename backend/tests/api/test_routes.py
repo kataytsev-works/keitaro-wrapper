@@ -26,6 +26,7 @@ SINGLE_FLOW: Final[int] = 203
 A: Final[int] = 301  # readable
 B: Final[int] = 302  # unreadable
 E: Final[int] = 305  # readable, not in flows
+NEW_CAMPAIGN: Final[int] = 500  # the id Keitaro gives a campaign made by the creator
 
 
 def offers_json(offers: list[tuple[int, int]]) -> list[dict[str, object]]:
@@ -68,6 +69,10 @@ class FakeKeitaro:
         ]
     )
     put_bodies: dict[int, object] = field(default_factory=dict)
+    failing_stream: int | None = None  # this flow's PUT answers 500, others work
+    report_bodies: list[object] = field(default_factory=list)
+    created_campaign: dict[str, object] | None = None
+    created_streams: list[dict[str, object]] = field(default_factory=list)
 
 
 @pytest.fixture
@@ -84,6 +89,8 @@ def tracker() -> Iterator[FakeKeitaro]:
     def put_stream(request: httpx.Request, stream_id: str) -> httpx.Response:
         body: dict[str, list[dict[str, object]]] = json.loads(request.content)
         state.put_bodies[int(stream_id)] = body
+        if state.failing_stream == int(stream_id):
+            return httpx.Response(500, json={"error": "tracker is down"})
         return httpx.Response(
             200,
             json={
@@ -97,7 +104,45 @@ def tracker() -> Iterator[FakeKeitaro]:
             },
         )
 
+    def create_campaign(request: httpx.Request) -> httpx.Response:
+        body: dict[str, object] = json.loads(request.content)
+        state.created_campaign = {**body, "id": NEW_CAMPAIGN, "state": "active"}
+        return httpx.Response(200, json=state.created_campaign)
+
+    def create_stream(request: httpx.Request) -> httpx.Response:
+        body: dict[str, object] = json.loads(request.content)
+        stream: dict[str, object] = {**body, "id": 900 + len(state.created_streams)}
+        state.created_streams.append(stream)
+        return httpx.Response(200, json=stream)
+
+    def build_report(request: httpx.Request) -> httpx.Response:
+        state.report_bodies.append(json.loads(request.content))
+        return httpx.Response(
+            200,
+            json={
+                "rows": [
+                    {
+                        "stream_id": FLOW,
+                        "offer_id": A,
+                        "clicks": 12,
+                        "campaign_unique_clicks": 7,
+                        "conversions": 2,
+                        "revenue": 3.5,
+                    }
+                ],
+                "total": 1,
+            },
+        )
+
     with respx.mock(base_url=KEITARO_URL, assert_all_called=False) as api:
+        api.post("/campaigns").mock(side_effect=create_campaign)
+        api.post("/streams").mock(side_effect=create_stream)
+        api.get(f"/campaigns/{NEW_CAMPAIGN}").mock(
+            side_effect=lambda _: httpx.Response(200, json=state.created_campaign)
+        )
+        api.get(f"/campaigns/{NEW_CAMPAIGN}/streams").mock(
+            side_effect=lambda _: httpx.Response(200, json=state.created_streams)
+        )
         api.get("/campaigns").respond(
             json=[
                 {"id": 100, "name": "older", "alias": "older", "state": "active"},
@@ -118,32 +163,28 @@ def tracker() -> Iterator[FakeKeitaro]:
         api.get("/domains").respond(json=[{"id": 7, "name": "track.test"}])
         api.get("/groups", params={"type": "campaigns"}).respond(json=[{"id": 3, "name": "TESTS"}])
         api.get("/traffic_sources").respond(json=[{"id": 5, "name": "SOURCE"}])
-        api.post("/report/build").respond(
-            json={
-                "rows": [
-                    {
-                        "stream_id": FLOW,
-                        "offer_id": A,
-                        "clicks": 12,
-                        "campaign_unique_clicks": 7,
-                        "conversions": 2,
-                        "revenue": 3.5,
-                    }
-                ],
-                "total": 1,
-            }
-        )
+        api.post("/report/build").mock(side_effect=build_report)
         yield state
 
 
 @pytest.fixture
 async def client(session: AsyncSession, tracker: FakeKeitaro) -> AsyncIterator[httpx.AsyncClient]:
+    """The app with a fresh session per request, as in production.
+
+    Every request sees only what earlier requests committed, so a route that forgets to commit
+    fails the tests. All sessions share the test connection, which is rolled back at the end.
+    """
     app: FastAPI = create_app()
     async with httpx.AsyncClient(base_url=KEITARO_URL) as keitaro_http:
         keitaro: KeitaroClient = KeitaroClient(keitaro_http)
 
         async def test_session() -> AsyncIterator[AsyncSession]:
-            yield session
+            async with AsyncSession(
+                bind=session.bind,
+                join_transaction_mode="create_savepoint",
+                expire_on_commit=False,
+            ) as request_session:
+                yield request_session
 
         app.dependency_overrides[get_session] = test_session
         app.dependency_overrides[get_keitaro] = lambda: keitaro
@@ -331,17 +372,75 @@ async def test_push_sends_draft_and_clears_it(
     }
 
 
+async def test_edits_are_committed(client: httpx.AsyncClient) -> None:
+    await import_campaign(client)
+    await client.post(f"/api/streams/{FLOW}/offers/{B}/remove")
+
+    reloaded: httpx.Response = await client.get(f"/api/campaigns/{CAMPAIGN}")
+    listed: httpx.Response = await client.get("/api/campaigns")
+
+    assert shares(reloaded.json(), FLOW) == [(A, 100, "active"), (B, 50, "removed")]
+    assert [(c["id"], c["has_unpushed_changes"]) for c in listed.json()] == [(CAMPAIGN, True)]
+
+
+async def test_partly_failed_push_keeps_the_pushed_flows(
+    client: httpx.AsyncClient, tracker: FakeKeitaro
+) -> None:
+    await import_campaign(client)
+    await client.post(f"/api/streams/{FLOW}/offers/{B}/remove")
+    await client.post(f"/api/streams/{SINGLE_FLOW}/offers", json={"offer_id": E})
+    tracker.failing_stream = SINGLE_FLOW
+
+    pushed: httpx.Response = await client.post(f"/api/campaigns/{CAMPAIGN}/push")
+    reloaded: dict[str, object] = (await client.get(f"/api/campaigns/{CAMPAIGN}")).json()
+
+    assert pushed.status_code == 502
+    assert flow(reloaded, FLOW)["has_unpushed_changes"] is False
+    assert flow(reloaded, SINGLE_FLOW)["has_unpushed_changes"] is True
+    assert reloaded["has_unpushed_changes"] is True
+
+
 async def test_refresh_with_draft_is_409_and_discard_drops_it(client: httpx.AsyncClient) -> None:
     await import_campaign(client)
     await client.post(f"/api/streams/{FLOW}/offers/{B}/remove")
 
     refreshed: httpx.Response = await client.post(f"/api/campaigns/{CAMPAIGN}/sync")
     discarded: httpx.Response = await client.post(f"/api/campaigns/{CAMPAIGN}/discard")
+    reloaded: httpx.Response = await client.get(f"/api/campaigns/{CAMPAIGN}")
 
     assert refreshed.status_code == 409
     assert discarded.status_code == 200
     assert discarded.json()["has_unpushed_changes"] is False
     assert shares(discarded.json(), FLOW) == [(A, 50, "active"), (B, 50, "active")]
+    assert reloaded.json() == discarded.json()
+
+
+@pytest.mark.parametrize("action", ["sync", "discard", "push"])
+async def test_actions_on_a_campaign_not_imported_are_404(
+    client: httpx.AsyncClient, action: str
+) -> None:
+    response: httpx.Response = await client.post(f"/api/campaigns/999/{action}")
+
+    assert response.status_code == 404
+
+
+@pytest.mark.parametrize(
+    ("period", "interval"),
+    [("today", "today"), ("yesterday", "yesterday"), ("7d", "7_days_ago")],
+)
+async def test_stats_ask_keitaro_for_this_campaign_and_period(
+    client: httpx.AsyncClient, tracker: FakeKeitaro, period: str, interval: str
+) -> None:
+    await client.get(f"/api/campaigns/{CAMPAIGN}/stats", params={"period": period})
+
+    assert tracker.report_bodies == [
+        {
+            "range": {"interval": interval},
+            "dimensions": ["stream_id", "offer_id"],
+            "measures": ["clicks", "campaign_unique_clicks", "conversions", "revenue"],
+            "filters": [{"name": "campaign_id", "operator": "EQUALS", "expression": CAMPAIGN}],
+        }
+    ]
 
 
 async def test_stats_are_mapped_per_flow_and_offer(client: httpx.AsyncClient) -> None:
@@ -400,6 +499,28 @@ async def test_create_campaign_validates_input(
     response: httpx.Response = await client.post("/api/campaigns", json={**CREATE_BODY, **change})
 
     assert response.status_code == 422
+
+
+async def test_create_campaign_makes_it_in_keitaro_and_opens_it(
+    client: httpx.AsyncClient, tracker: FakeKeitaro
+) -> None:
+    response: httpx.Response = await client.post(
+        "/api/campaigns",
+        json={**CREATE_BODY, "name": "  New campaign  ", "countries": ["AU", "NZ"]},
+    )
+
+    assert response.status_code == 200, response.text
+    campaign: dict[str, object] = response.json()
+    assert (campaign["id"], campaign["name"]) == (NEW_CAMPAIGN, "New campaign")
+    created = tracker.created_campaign
+    assert created is not None
+    assert (created["domain_id"], created["group_id"], created["traffic_source_id"]) == (7, "3", 5)
+    geo, offers = tracker.created_streams
+    assert geo["filters"] == [{"name": "country", "mode": "accept", "payload": ["AU", "NZ"]}]
+    assert offers["offers"] == [{"offer_id": A, "share": 100, "state": "active"}]
+    reloaded: httpx.Response = await client.get(f"/api/campaigns/{NEW_CAMPAIGN}")
+    assert reloaded.status_code == 200
+    assert shares(reloaded.json(), 901) == [(A, 100, "active")]
 
 
 async def test_create_campaign_with_unavailable_offer_is_409(client: httpx.AsyncClient) -> None:

@@ -60,7 +60,10 @@ export function CampaignEditorPage() {
 
   useEffect(loadStats, [loadStats]);
 
-  /** Run a request that answers with the campaign: lock the buttons, show errors, update the view. */
+  /**
+   * Run a request that answers with the campaign: lock the buttons, show errors, update the view.
+   * After an error the campaign is reloaded: a push can fail halfway with some flows already sent.
+   */
   const run = useCallback(
     async (request: () => Promise<Campaign>, success?: string) => {
       setBusy(true);
@@ -73,11 +76,12 @@ export function CampaignEditorPage() {
           title: "Не получилось",
           message: errorText(error),
         });
+        await api.campaign(campaignId).then(setCampaign, () => undefined);
       } finally {
         setBusy(false);
       }
     },
-    [],
+    [campaignId],
   );
 
   if (loadError) {

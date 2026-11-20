@@ -34,6 +34,7 @@ class FakeKeitaro:
     deleted: list[int] = field(default_factory=list)
     fail_stream_number: int | None = None  # 1 or 2: that POST /streams fails
     fail_delete: bool = False
+    fail_import: bool = False  # GET of the new campaign's flows fails
 
 
 @pytest.fixture
@@ -61,6 +62,8 @@ def tracker() -> Iterator[FakeKeitaro]:
         return httpx.Response(200, json=stream)
 
     def get_streams(_: httpx.Request) -> httpx.Response:
+        if state.fail_import:
+            return httpx.Response(500, json={"error": "tracker is down"})
         return httpx.Response(
             200,
             json=[{**body, "id": 900 + index} for index, body in enumerate(state.stream_bodies)],
@@ -183,6 +186,20 @@ async def test_failed_cleanup_names_the_campaign_left_behind(
         await create_campaign(session, keitaro, new_campaign(), now=NOW)
 
     assert f"campaign {NEW_CAMPAIGN_ID} is left in Keitaro" in caught.value.message
+
+
+async def test_failed_import_keeps_the_complete_campaign_and_names_it(
+    session: AsyncSession, keitaro: KeitaroClient, tracker: FakeKeitaro
+) -> None:
+    tracker.fail_import = True
+
+    with pytest.raises(KeitaroError) as caught:
+        await create_campaign(session, keitaro, new_campaign(), now=NOW)
+
+    assert tracker.deleted == []
+    assert len(tracker.stream_bodies) == 2
+    assert caught.value.status_code == 500
+    assert f"campaign {NEW_CAMPAIGN_ID} is created in Keitaro" in caught.value.message
 
 
 @pytest.mark.parametrize(
