@@ -35,8 +35,7 @@ select = ["E", "W", "F", "I", "N", "UP", "B", "A", "C4", "SIM", "RET", "PT", "RU
 strict = true
 warn_unreachable = true
 enable_error_code = ["ignore-without-code", "redundant-expr", "truthy-bool"]
-# Add "tests" together with the first test file: mypy fails on a missing or empty path.
-files = ["app"]
+files = ["app", "tests"]
 plugins = ["pydantic.mypy"]
 
 [tool.pydantic-mypy]
