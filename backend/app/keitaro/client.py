@@ -9,13 +9,15 @@ from collections.abc import Callable
 from typing import Final
 
 import httpx
-from pydantic import BaseModel, TypeAdapter, ValidationError
+from pydantic import BaseModel, Field, TypeAdapter, ValidationError
 
 from app.core.config import Settings
 from app.keitaro.models import (
     Campaign,
     CampaignCreate,
     Offer,
+    OfferStatsRow,
+    ReportInterval,
     Stream,
     StreamCreate,
     StreamOffer,
@@ -24,9 +26,16 @@ from app.keitaro.models import (
 API_KEY_HEADER: Final[str] = "Api-Key"
 REQUEST_TIMEOUT_SECONDS: Final[float] = 10.0
 ERROR_BODY_PREVIEW_CHARS: Final[int] = 200
+OFFER_REPORT_MEASURES: Final[list[str]] = [
+    "clicks",
+    "campaign_unique_clicks",
+    "conversions",
+    "revenue",
+]
 
 type _Validator[T] = Callable[[object], T]
 
+_CAMPAIGNS: Final[TypeAdapter[list[Campaign]]] = TypeAdapter(list[Campaign])
 _STREAMS: Final[TypeAdapter[list[Stream]]] = TypeAdapter(list[Stream])
 _OFFERS: Final[TypeAdapter[list[Offer]]] = TypeAdapter(list[Offer])
 
@@ -93,6 +102,10 @@ class KeitaroClient:
             raise KeitaroError(response.status_code, _error_message(response))
         return response
 
+    async def list_campaigns(self) -> list[Campaign]:
+        response: httpx.Response = await self._request("GET", "/campaigns")
+        return _parse(response, _CAMPAIGNS.validate_python)
+
     async def get_campaign(self, campaign_id: int) -> Campaign:
         response: httpx.Response = await self._request("GET", f"/campaigns/{campaign_id}")
         return _parse(response, Campaign.model_validate)
@@ -124,9 +137,48 @@ class KeitaroClient:
         response: httpx.Response = await self._request("PUT", f"/streams/{stream_id}", body=body)
         return _parse(response, Stream.model_validate)
 
+    async def build_offer_report(
+        self, campaign_id: int, interval: ReportInterval
+    ) -> list[OfferStatsRow]:
+        """Clicks, unique clicks, conversions and revenue of a campaign by flow and offer.
+
+        A row with `offer_id == 0` counts clicks that went to no offer (a redirect flow).
+        """
+        body: _ReportRequest = _ReportRequest(
+            period=_ReportRange(interval=interval),
+            dimensions=["stream_id", "offer_id"],
+            measures=OFFER_REPORT_MEASURES,
+            filters=[_ReportFilter(name="campaign_id", operator="EQUALS", expression=campaign_id)],
+        )
+        response: httpx.Response = await self._request(
+            "POST", "/report/build", body=body, by_alias=True
+        )
+        return _parse(response, _ReportResponse.model_validate).rows
+
 
 class _OffersUpdate(BaseModel):
     offers: list[StreamOffer]
+
+
+class _ReportRange(BaseModel):
+    interval: str
+
+
+class _ReportFilter(BaseModel):
+    name: str
+    operator: str
+    expression: int
+
+
+class _ReportRequest(BaseModel):
+    period: _ReportRange = Field(serialization_alias="range")
+    dimensions: list[str]
+    measures: list[str]
+    filters: list[_ReportFilter]
+
+
+class _ReportResponse(BaseModel):
+    rows: list[OfferStatsRow]
 
 
 def _parse[T](response: httpx.Response, validate: _Validator[T]) -> T:

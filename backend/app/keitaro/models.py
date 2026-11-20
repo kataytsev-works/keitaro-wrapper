@@ -13,6 +13,8 @@ type StreamType = Literal["regular", "default", "forced"]
 type StreamSchema = Literal["redirect", "landings", "action"]
 type FilterMode = Literal["accept", "reject"]
 type OfferState = Literal["active", "disabled"]
+# Report periods from Keitaro's `range.interval` that the wrapper offers.
+type ReportInterval = Literal["today", "yesterday", "7_days_ago"]
 
 
 class KeitaroModel(BaseModel):
@@ -88,3 +90,14 @@ class StreamCreate(KeitaroModel):
     action_payload: str | None = None
     filters: list[StreamFilter] = Field(default_factory=list)
     offers: list[StreamOffer] = Field(default_factory=list)
+
+
+class OfferStatsRow(KeitaroModel):
+    """One row of `POST /report/build` grouped by flow and offer. `offer_id` 0: no offer."""
+
+    stream_id: int
+    offer_id: int
+    clicks: int
+    campaign_unique_clicks: int
+    conversions: int
+    revenue: float
