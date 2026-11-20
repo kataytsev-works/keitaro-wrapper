@@ -110,6 +110,7 @@ class FakeKeitaro:
         ]
     )
     put_mode: str = "echo"  # echo | other_shares | error
+    failing_stream: int | None = None  # this flow's PUT answers 500, others work
     put_bodies: dict[int, object] = field(default_factory=dict)
 
 
@@ -120,7 +121,7 @@ def tracker() -> Iterator[FakeKeitaro]:
     def put_stream(request: httpx.Request, stream_id: str) -> httpx.Response:
         body: dict[str, list[dict[str, object]]] = json.loads(request.content)
         state.put_bodies[int(stream_id)] = body
-        if state.put_mode == "error":
+        if state.put_mode == "error" or state.failing_stream == int(stream_id):
             return httpx.Response(500, json={"error": "tracker is down"})
         offers: list[dict[str, object]] = body["offers"]
         if state.put_mode == "other_shares":
@@ -459,3 +460,71 @@ async def test_push_unknown_campaign_is_not_found(
 ) -> None:
     with pytest.raises(NotFoundError):
         await push_campaign(seeded, keitaro, 999_999)
+
+
+async def test_push_refuses_flow_whose_shares_do_not_sum_to_100(
+    seeded: AsyncSession, keitaro: KeitaroClient, tracker: FakeKeitaro
+) -> None:
+    (await edit_row(seeded, FLOW, A)).share = 40  # 40 + 50: broken split in the database
+    stream: Stream | None = await seeded.get(Stream, FLOW)
+    assert stream is not None
+    stream.has_unpushed_changes = True
+    await seeded.flush()
+
+    with pytest.raises(EditorError):
+        await push_campaign(seeded, keitaro, CAMPAIGN)
+
+    assert tracker.put_bodies == {}
+    assert await is_dirty(seeded, FLOW)
+
+
+async def test_push_sends_offers_in_position_order_not_id_order(
+    seeded: AsyncSession, keitaro: KeitaroClient, tracker: FakeKeitaro
+) -> None:
+    await remove_offer(seeded, FLOW, A)
+    await restore_offer(seeded, FLOW, A)  # now B (302) is first, A (301) second
+
+    await push_campaign(seeded, keitaro, CAMPAIGN)
+
+    body = tracker.put_bodies[FLOW]
+    assert isinstance(body, dict)
+    assert [offer["offer_id"] for offer in body["offers"]] == [B, A]
+
+
+async def test_push_pushes_every_changed_flow(
+    seeded: AsyncSession, keitaro: KeitaroClient, tracker: FakeKeitaro
+) -> None:
+    await remove_offer(seeded, FLOW, B)
+    await set_pin(seeded, SINGLE_FLOW, A, share=100)
+
+    await push_campaign(seeded, keitaro, CAMPAIGN)
+
+    assert set(tracker.put_bodies) == {FLOW, SINGLE_FLOW}
+    assert not await is_dirty(seeded, FLOW)
+    assert not await is_dirty(seeded, SINGLE_FLOW)
+
+
+async def test_push_failure_keeps_earlier_flows_pushed(
+    seeded: AsyncSession, keitaro: KeitaroClient, tracker: FakeKeitaro
+) -> None:
+    await remove_offer(seeded, FLOW, B)
+    await set_pin(seeded, SINGLE_FLOW, A, share=100)
+    tracker.failing_stream = SINGLE_FLOW  # flows go in position order: FLOW first
+
+    with pytest.raises(KeitaroError):
+        await push_campaign(seeded, keitaro, CAMPAIGN)
+
+    assert not await is_dirty(seeded, FLOW)
+    assert await is_dirty(seeded, SINGLE_FLOW)
+
+
+async def test_removed_pinned_offer_no_longer_counts_in_the_split(seeded: AsyncSession) -> None:
+    await set_pin(seeded, FLOW, A, share=70)
+
+    await remove_offer(seeded, FLOW, A)
+
+    assert await rows(seeded, FLOW) == [
+        row(B, 100, ACTIVE, 0),
+        row(A, 70, REMOVED, 1, pinned=True),
+        row(D, 30, REMOVED, 2),
+    ]
