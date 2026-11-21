@@ -127,8 +127,8 @@ compose.dev.yaml PostgreSQL for development
   what was sent. "Discard" returns the edited flows to their state after the last sync or push,
   then re-reads Keitaro; the discard itself is local and is kept even if Keitaro is unreachable.
 - **Offer states.** `active`: in the flow and sent to Keitaro. `removed`: taken out in the wrapper,
-  kept so it can be restored; removing an offer also drops its pin. `missing`: was active, but disappeared from Keitaro on sync; can be
-  restored. "Delete" removes a removed or missing offer from the wrapper for good.
+  kept so it can be restored. `missing`: was active, but disappeared from Keitaro on sync; can be
+  restored. An offer that becomes removed or missing loses its pin. "Delete" removes a removed or missing offer from the wrapper for good.
 - **Shares.** Pinned offers keep their share; the rest of 100% is split equally between unpinned
   active offers, and the remainder of the division goes to the first of them in order.
 - **Creator.** Keitaro has no transactions: if a flow cannot be created, the new campaign is deleted

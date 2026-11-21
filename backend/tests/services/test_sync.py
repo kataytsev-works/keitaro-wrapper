@@ -270,6 +270,22 @@ async def test_pin_is_kept_and_share_comes_from_keitaro(
     assert row.share == 70
 
 
+async def test_pinned_offer_gone_from_keitaro_loses_its_pin(
+    session: AsyncSession, keitaro: KeitaroClient, tracker: FakeKeitaro
+) -> None:
+    await sync_campaign(session, keitaro, CAMPAIGN_ID, now=T1)
+    (await get_row(session, DE_STREAM, OFFER_B)).is_pinned = True
+    await session.flush()
+    tracker.set_offers(DE_STREAM, [(OFFER_A, 100)])
+
+    await sync_campaign(session, keitaro, CAMPAIGN_ID, now=T2)
+
+    assert rows(await stream_offers(session, DE_STREAM)) == [
+        (OFFER_A, 100, OfferStatus.ACTIVE, 0, False),
+        (OFFER_B, 50, OfferStatus.MISSING, 1, False),
+    ]
+
+
 async def test_new_offer_in_keitaro_is_added_unpinned(
     session: AsyncSession, keitaro: KeitaroClient, tracker: FakeKeitaro
 ) -> None:

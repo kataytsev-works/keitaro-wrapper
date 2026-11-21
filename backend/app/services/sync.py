@@ -108,9 +108,9 @@ def _sync_stream_offers(local_stream: Stream, remote_offers: Sequence[km.StreamO
     """Make the offers of an editable flow match Keitaro, keeping the wrapper's own state.
 
     Offers present in Keitaro become active with Keitaro's share and order; a pin set in the
-    wrapper is kept. An active offer gone from Keitaro becomes missing; removed and missing offers
-    keep their status and last share. Inactive offers go after the active ones. The result is
-    saved as the state "discard changes" returns to.
+    wrapper is kept. An active offer gone from Keitaro becomes missing and loses its pin; removed
+    and missing offers keep their status and last share. Inactive offers go after the active ones.
+    The result is saved as the state "discard changes" returns to.
     """
     local_rows: dict[int, StreamOffer] = {row.offer_id: row for row in local_stream.offers}
     remote_offer_ids: set[int] = {remote_offer.offer_id for remote_offer in remote_offers}
@@ -131,7 +131,10 @@ def _sync_stream_offers(local_stream: Stream, remote_offers: Sequence[km.StreamO
     )
     for position, row in enumerate(inactive_rows, start=len(synced_rows)):
         if row.status is OfferStatus.ACTIVE:
+            # Like a removal, losing the offer drops its pin: an inactive offer cannot be
+            # unpinned, and a stale pin would block restoring it under other pins.
             row.status = OfferStatus.MISSING
+            row.is_pinned = False
         row.position = position
         synced_rows.append(row)
 

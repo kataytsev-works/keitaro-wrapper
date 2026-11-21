@@ -115,33 +115,35 @@ function OffersTable({
 
   return (
     <Stack gap="sm">
-      <Table striped withTableBorder>
-        <Table.Thead>
-          <Table.Tr>
-            <Table.Th>Оффер</Table.Th>
-            <Table.Th>Доля</Table.Th>
-            <Table.Th>Статус</Table.Th>
-            <Table.Th ta="right">Клики</Table.Th>
-            <Table.Th ta="right">Уники</Table.Th>
-            <Table.Th ta="right">Конверсии</Table.Th>
-            <Table.Th ta="right">Доход</Table.Th>
-            <Table.Th>Действия</Table.Th>
-          </Table.Tr>
-        </Table.Thead>
-        <Table.Tbody>
-          {stream.offers.map((offer) => (
-            <OfferRow
-              key={offer.offer_id}
-              stream={stream}
-              offer={offer}
-              stats={stats.get(statsKey(stream.id, offer.offer_id))}
-              isLastActive={offer.status === "active" && activeCount === 1}
-              busy={busy}
-              onEdit={onEdit}
-            />
-          ))}
-        </Table.Tbody>
-      </Table>
+      <Table.ScrollContainer minWidth={680}>
+        <Table striped withTableBorder>
+          <Table.Thead>
+            <Table.Tr>
+              <Table.Th>Оффер</Table.Th>
+              <Table.Th>Доля</Table.Th>
+              <Table.Th>Статус</Table.Th>
+              <Table.Th ta="right">Клики</Table.Th>
+              <Table.Th ta="right">Уники</Table.Th>
+              <Table.Th ta="right">Конверсии</Table.Th>
+              <Table.Th ta="right">Доход</Table.Th>
+              <Table.Th>Действия</Table.Th>
+            </Table.Tr>
+          </Table.Thead>
+          <Table.Tbody>
+            {stream.offers.map((offer) => (
+              <OfferRow
+                key={offer.offer_id}
+                stream={stream}
+                offer={offer}
+                stats={stats.get(statsKey(stream.id, offer.offer_id))}
+                isLastActive={offer.status === "active" && activeCount === 1}
+                busy={busy}
+                onEdit={onEdit}
+              />
+            ))}
+          </Table.Tbody>
+        </Table>
+      </Table.ScrollContainer>
       <Group align="end">
         <Select
           label="Добавить оффер"
