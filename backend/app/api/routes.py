@@ -141,8 +141,14 @@ async def refresh_campaign(
 async def discard_changes(
     campaign_id: int, session: SessionDep, keitaro: KeitaroDep
 ) -> CampaignOut:
-    """Return edited flows to their state after the last sync or push, then re-read Keitaro."""
-    await editor.discard_changes(session, keitaro, campaign_id, now=datetime.now(UTC))
+    """Return edited flows to their state after the last sync or push, then re-read Keitaro.
+
+    The discard is committed before Keitaro is asked: if the refresh fails, the error is returned
+    but the edits stay dropped.
+    """
+    await editor.discard_changes(session, campaign_id)
+    await session.commit()
+    await sync_campaign(session, keitaro, campaign_id, now=datetime.now(UTC))
     await session.commit()
     return await load_campaign_view(session, campaign_id)
 

@@ -326,6 +326,7 @@ function PinControl({ stream, offer, busy, onEdit }: PinControlProps) {
           />
           <Button
             size="xs"
+            disabled={share === ""}
             onClick={() => {
               setOpened(false);
               onEdit(() =>

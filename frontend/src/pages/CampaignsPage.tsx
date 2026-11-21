@@ -45,8 +45,13 @@ export function CampaignsPage() {
     [keitaroCampaigns],
   );
 
+  /** Open the chosen campaign; it is imported only when the wrapper does not have it yet. */
   async function importSelected() {
     if (selected === null) return;
+    if (campaigns?.some((campaign) => campaign.id === Number(selected))) {
+      navigate(`/campaigns/${selected}`);
+      return;
+    }
     setImporting(true);
     try {
       const campaign = await api.importCampaign(Number(selected));

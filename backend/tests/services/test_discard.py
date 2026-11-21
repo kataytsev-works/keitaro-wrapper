@@ -146,7 +146,7 @@ async def test_discard_returns_pins_removals_and_drops_added_offers(
     await add_offer(imported, keitaro, FLOW, E)
     assert await offers_of(imported, FLOW) != pushed
 
-    await discard_changes(imported, keitaro, CAMPAIGN, now=T2)
+    await discard_changes(imported, CAMPAIGN)
 
     assert await offers_of(imported, FLOW) == pushed
     assert await is_draft(imported, FLOW) is False
@@ -160,7 +160,7 @@ async def test_discard_keeps_an_offer_removed_by_an_earlier_push(
     await push_campaign(imported, keitaro, CAMPAIGN)
     await restore_offer(imported, FLOW, C)
 
-    await discard_changes(imported, keitaro, CAMPAIGN, now=T2)
+    await discard_changes(imported, CAMPAIGN)
 
     assert await offers_of(imported, FLOW) == [
         (A, 50, "active", False),
@@ -169,14 +169,20 @@ async def test_discard_keeps_an_offer_removed_by_an_earlier_push(
     ]
 
 
-async def test_discard_picks_up_changes_made_in_keitaro(
+async def test_discard_is_local_and_a_sync_after_it_picks_up_keitaro(
     imported: AsyncSession, keitaro: KeitaroClient, tracker: FakeKeitaro
 ) -> None:
     await remove_offer(imported, FLOW, B)
     tracker.flows[FLOW] = [(A, 50), (B, 50)]
 
-    await discard_changes(imported, keitaro, CAMPAIGN, now=T2)
+    await discard_changes(imported, CAMPAIGN)
 
+    assert await offers_of(imported, FLOW) == [
+        (A, 34, "active", False),
+        (B, 33, "active", False),
+        (C, 33, "active", False),
+    ]
+    await sync_campaign(imported, keitaro, CAMPAIGN, now=T2)
     assert await offers_of(imported, FLOW) == [
         (A, 50, "active", False),
         (B, 50, "active", False),
@@ -191,7 +197,7 @@ async def test_discard_leaves_flows_without_edits_alone(
     await push_campaign(imported, keitaro, CAMPAIGN)
     await remove_offer(imported, FLOW, B)
 
-    await discard_changes(imported, keitaro, CAMPAIGN, now=T2)
+    await discard_changes(imported, CAMPAIGN)
 
     assert await offers_of(imported, OTHER_FLOW) == [
         (A, 70, "active", True),
@@ -208,4 +214,4 @@ async def test_discard_of_a_campaign_not_imported_is_not_found(
     session: AsyncSession, keitaro: KeitaroClient, tracker: FakeKeitaro
 ) -> None:
     with pytest.raises(NotFoundError):
-        await discard_changes(session, keitaro, CAMPAIGN, now=T2)
+        await discard_changes(session, CAMPAIGN)

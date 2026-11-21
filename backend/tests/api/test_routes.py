@@ -70,6 +70,8 @@ class FakeKeitaro:
     )
     put_bodies: dict[int, object] = field(default_factory=dict)
     failing_stream: int | None = None  # this flow's PUT answers 500, others work
+    misreporting_stream: int | None = None  # this flow's PUT answers with other shares
+    created_campaign_status: int = 200  # GET of the campaign made by the creator
     report_bodies: list[object] = field(default_factory=list)
     created_campaign: dict[str, object] | None = None
     created_streams: list[dict[str, object]] = field(default_factory=list)
@@ -91,6 +93,8 @@ def tracker() -> Iterator[FakeKeitaro]:
         state.put_bodies[int(stream_id)] = body
         if state.failing_stream == int(stream_id):
             return httpx.Response(500, json={"error": "tracker is down"})
+        if state.misreporting_stream == int(stream_id):
+            body = {"offers": [{**offer, "share": 1} for offer in body["offers"]]}
         return httpx.Response(
             200,
             json={
@@ -138,7 +142,12 @@ def tracker() -> Iterator[FakeKeitaro]:
         api.post("/campaigns").mock(side_effect=create_campaign)
         api.post("/streams").mock(side_effect=create_stream)
         api.get(f"/campaigns/{NEW_CAMPAIGN}").mock(
-            side_effect=lambda _: httpx.Response(200, json=state.created_campaign)
+            side_effect=lambda _: httpx.Response(
+                state.created_campaign_status,
+                json=state.created_campaign
+                if state.created_campaign_status == 200
+                else {"error": "no such campaign"},
+            )
         )
         api.get(f"/campaigns/{NEW_CAMPAIGN}/streams").mock(
             side_effect=lambda _: httpx.Response(200, json=state.created_streams)
@@ -400,6 +409,67 @@ async def test_partly_failed_push_keeps_the_pushed_flows(
     assert reloaded["has_unpushed_changes"] is True
 
 
+async def test_push_refused_by_verification_keeps_the_pushed_flows(
+    client: httpx.AsyncClient, tracker: FakeKeitaro
+) -> None:
+    await import_campaign(client)
+    await client.post(f"/api/streams/{FLOW}/offers/{B}/remove")
+    await client.post(f"/api/streams/{SINGLE_FLOW}/offers", json={"offer_id": E})
+    tracker.misreporting_stream = SINGLE_FLOW
+
+    pushed: httpx.Response = await client.post(f"/api/campaigns/{CAMPAIGN}/push")
+    reloaded: dict[str, object] = (await client.get(f"/api/campaigns/{CAMPAIGN}")).json()
+
+    assert pushed.status_code == 409
+    assert flow(reloaded, FLOW)["has_unpushed_changes"] is False
+    assert flow(reloaded, SINGLE_FLOW)["has_unpushed_changes"] is True
+
+
+async def test_sync_pin_delete_and_push_are_committed(
+    client: httpx.AsyncClient, tracker: FakeKeitaro
+) -> None:
+    await import_campaign(client)
+
+    tracker.streams[1]["offers"] = offers_json([(A, 70), (B, 30)])
+    await client.post(f"/api/campaigns/{CAMPAIGN}/sync")
+    synced: dict[str, object] = (await client.get(f"/api/campaigns/{CAMPAIGN}")).json()
+    assert shares(synced, FLOW) == [(A, 70, "active"), (B, 30, "active")]
+
+    await client.put(f"/api/streams/{FLOW}/offers/{A}/pin", json={"share": 60})
+    pinned: dict[str, object] = (await client.get(f"/api/campaigns/{CAMPAIGN}")).json()
+    offers = flow(pinned, FLOW)["offers"]
+    assert isinstance(offers, list)
+    assert [(o["offer_id"], o["share"], o["is_pinned"]) for o in offers] == [
+        (A, 60, True),
+        (B, 40, False),
+    ]
+
+    await client.put(f"/api/streams/{FLOW}/offers/{A}/pin", json={"share": None})
+    await client.post(f"/api/streams/{FLOW}/offers/{B}/remove")
+    await client.delete(f"/api/streams/{FLOW}/offers/{B}")
+    deleted: dict[str, object] = (await client.get(f"/api/campaigns/{CAMPAIGN}")).json()
+    assert shares(deleted, FLOW) == [(A, 100, "active")]
+
+    await client.post(f"/api/campaigns/{CAMPAIGN}/push")
+    pushed: dict[str, object] = (await client.get(f"/api/campaigns/{CAMPAIGN}")).json()
+    assert pushed["has_unpushed_changes"] is False
+
+
+async def test_discard_is_kept_when_keitaro_is_down(
+    client: httpx.AsyncClient, tracker: FakeKeitaro
+) -> None:
+    await import_campaign(client)
+    await client.post(f"/api/streams/{FLOW}/offers/{B}/remove")
+    tracker.campaign_status = 500
+
+    discarded: httpx.Response = await client.post(f"/api/campaigns/{CAMPAIGN}/discard")
+    reloaded: dict[str, object] = (await client.get(f"/api/campaigns/{CAMPAIGN}")).json()
+
+    assert discarded.status_code == 502
+    assert reloaded["has_unpushed_changes"] is False
+    assert shares(reloaded, FLOW) == [(A, 50, "active"), (B, 50, "active")]
+
+
 async def test_refresh_with_draft_is_409_and_discard_drops_it(client: httpx.AsyncClient) -> None:
     await import_campaign(client)
     await client.post(f"/api/streams/{FLOW}/offers/{B}/remove")
@@ -521,6 +591,17 @@ async def test_create_campaign_makes_it_in_keitaro_and_opens_it(
     reloaded: httpx.Response = await client.get(f"/api/campaigns/{NEW_CAMPAIGN}")
     assert reloaded.status_code == 200
     assert shares(reloaded.json(), 901) == [(A, 100, "active")]
+
+
+async def test_create_campaign_names_the_campaign_when_its_import_is_404(
+    client: httpx.AsyncClient, tracker: FakeKeitaro
+) -> None:
+    tracker.created_campaign_status = 404
+
+    response: httpx.Response = await client.post("/api/campaigns", json=CREATE_BODY)
+
+    assert response.status_code == 404
+    assert f"campaign {NEW_CAMPAIGN} is created in Keitaro" in response.json()["detail"]
 
 
 async def test_create_campaign_with_unavailable_offer_is_409(client: httpx.AsyncClient) -> None:

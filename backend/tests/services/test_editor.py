@@ -109,7 +109,7 @@ class FakeKeitaro:
             {"id": E, "name": "Offer E", "state": "active"},
         ]
     )
-    put_mode: str = "echo"  # echo | other_shares | error
+    put_mode: str = "echo"  # echo | other_shares | reversed | error
     failing_stream: int | None = None  # this flow's PUT answers 500, others work
     put_bodies: dict[int, object] = field(default_factory=dict)
 
@@ -126,6 +126,8 @@ def tracker() -> Iterator[FakeKeitaro]:
         offers: list[dict[str, object]] = body["offers"]
         if state.put_mode == "other_shares":
             offers = [{**offer, "share": 1} for offer in offers]
+        if state.put_mode == "reversed":
+            offers = offers[::-1]
         return httpx.Response(
             200,
             json={
@@ -301,6 +303,22 @@ async def test_remove_offer_not_in_flow_is_not_found(seeded: AsyncSession) -> No
 # ------------------------------------------------------------------------- restore_offer
 
 
+async def test_shares_follow_flow_order_not_offer_ids(
+    seeded: AsyncSession, keitaro: KeitaroClient, tracker: FakeKeitaro
+) -> None:
+    await remove_offer(seeded, FLOW, A)
+    await add_offer(seeded, keitaro, FLOW, E)
+
+    await restore_offer(seeded, FLOW, A)
+
+    assert await rows(seeded, FLOW) == [
+        row(B, 34, ACTIVE, 0),
+        row(E, 33, ACTIVE, 1),
+        row(A, 33, ACTIVE, 2),
+        row(D, 30, REMOVED, 3),
+    ]
+
+
 async def test_restore_removed_offer(seeded: AsyncSession) -> None:
     await restore_offer(seeded, FLOW, D)
 
@@ -342,7 +360,13 @@ async def test_restore_active_offer_is_refused(seeded: AsyncSession) -> None:
 # -------------------------------------------------------------------------- delete_offer
 
 
-async def test_delete_removed_offer_drops_the_row_only(seeded: AsyncSession) -> None:
+@pytest.mark.parametrize("status", [REMOVED, MISSING])
+async def test_delete_inactive_offer_drops_the_row_only(
+    seeded: AsyncSession, status: OfferStatus
+) -> None:
+    (await edit_row(seeded, FLOW, D)).status = status
+    await seeded.flush()
+
     await delete_offer(seeded, FLOW, D)
 
     assert await rows(seeded, FLOW) == [row(A, 50, ACTIVE, 0), row(B, 50, ACTIVE, 1)]
@@ -443,6 +467,18 @@ async def test_push_refuses_when_keitaro_saved_other_shares(
     assert await is_dirty(seeded, FLOW)
 
 
+async def test_push_refuses_when_keitaro_saved_another_order(
+    seeded: AsyncSession, keitaro: KeitaroClient, tracker: FakeKeitaro
+) -> None:
+    await add_offer(seeded, keitaro, FLOW, E)
+    tracker.put_mode = "reversed"
+
+    with pytest.raises(EditorError):
+        await push_campaign(seeded, keitaro, CAMPAIGN)
+
+    assert await is_dirty(seeded, FLOW)
+
+
 async def test_push_keitaro_error_keeps_the_draft(
     seeded: AsyncSession, keitaro: KeitaroClient, tracker: FakeKeitaro
 ) -> None:
@@ -518,13 +554,31 @@ async def test_push_failure_keeps_earlier_flows_pushed(
     assert await is_dirty(seeded, SINGLE_FLOW)
 
 
-async def test_removed_pinned_offer_no_longer_counts_in_the_split(seeded: AsyncSession) -> None:
+async def test_removed_pinned_offer_loses_its_pin_and_leaves_the_split(
+    seeded: AsyncSession,
+) -> None:
     await set_pin(seeded, FLOW, A, share=70)
 
     await remove_offer(seeded, FLOW, A)
 
     assert await rows(seeded, FLOW) == [
         row(B, 100, ACTIVE, 0),
-        row(A, 70, REMOVED, 1, pinned=True),
+        row(A, 70, REMOVED, 1),
+        row(D, 30, REMOVED, 2),
+    ]
+
+
+async def test_removed_pinned_offer_can_be_restored_under_a_full_pin(
+    seeded: AsyncSession,
+) -> None:
+    await set_pin(seeded, FLOW, A, share=60)
+    await remove_offer(seeded, FLOW, A)
+    await set_pin(seeded, FLOW, B, share=100)
+
+    await restore_offer(seeded, FLOW, A)
+
+    assert await rows(seeded, FLOW) == [
+        row(B, 100, ACTIVE, 0, pinned=True),
+        row(A, 0, ACTIVE, 1),
         row(D, 30, REMOVED, 2),
     ]

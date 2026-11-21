@@ -57,7 +57,8 @@ async def _keitaro_failed(_: Request, exc: Exception) -> JSONResponse:
     assert isinstance(exc, KeitaroError)
     if exc.status_code == KEITARO_NOT_FOUND:
         return JSONResponse(
-            status_code=status.HTTP_404_NOT_FOUND, content={"detail": "not found in Keitaro"}
+            status_code=status.HTTP_404_NOT_FOUND,
+            content={"detail": f"not found in Keitaro: {exc.message}"},
         )
     return JSONResponse(
         status_code=status.HTTP_502_BAD_GATEWAY,

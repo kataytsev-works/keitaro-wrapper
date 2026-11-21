@@ -5,8 +5,6 @@ Every edit changes only the wrapper's database and marks the flow as having unpu
 do not commit: the caller owns the transaction.
 """
 
-from datetime import datetime
-
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -15,7 +13,6 @@ from app.keitaro import models as km
 from app.keitaro.client import KeitaroClient
 from app.models import Campaign, Offer, OfferStatus, Stream, StreamOffer
 from app.services.shares import TOTAL_SHARE, SharesError, ShareSlot, distribute_shares
-from app.services.sync import sync_campaign
 
 
 class EditorError(Exception):
@@ -72,8 +69,9 @@ async def add_offer(
 async def remove_offer(session: AsyncSession, stream_id: int, offer_id: int) -> Stream:
     """Take an active offer out of the flow; it stays in the wrapper and can be restored.
 
-    The offer keeps its last share; the remaining active offers are recalculated. The last active
-    offer cannot be removed: Keitaro would get a flow without offers.
+    The offer keeps its last share but loses its pin, so restoring it later cannot clash with pins
+    set meanwhile; the remaining active offers are recalculated. The last active offer cannot be
+    removed: Keitaro would get a flow without offers.
 
     Raises:
         NotFoundError: there is no such flow, or the offer is not in it.
@@ -88,6 +86,7 @@ async def remove_offer(session: AsyncSession, stream_id: int, offer_id: int) -> 
         raise EditorError(f"offer {offer_id} is the last active offer of flow {stream_id}")
 
     row.status = OfferStatus.REMOVED
+    row.is_pinned = False
 
     _renumber(stream)
     _rebalance(stream)
@@ -239,19 +238,16 @@ async def push_campaign(
     return campaign
 
 
-async def discard_changes(
-    session: AsyncSession, keitaro: KeitaroClient, campaign_id: int, *, now: datetime
-) -> Campaign:
-    """Drop the unpushed edits of a campaign, then refresh it from Keitaro.
+async def discard_changes(session: AsyncSession, campaign_id: int) -> Campaign:
+    """Drop the unpushed edits of a campaign without asking Keitaro.
 
     Every flow with unpushed edits returns to its saved state: the one after the last sync or
     push. Pins and offers removed in the wrapper come back as they were, which a plain re-read of
-    Keitaro could not do. Offers added in the draft are dropped. The refresh afterwards picks up
-    what changed in Keitaro meanwhile.
+    Keitaro could not do. Offers added in the draft are dropped. The state is local, so discard
+    works even when Keitaro is unreachable; the caller refreshes from Keitaro afterwards.
 
     Raises:
         NotFoundError: the campaign is not imported.
-        KeitaroError: Keitaro could not be read; nothing is dropped unless the caller commits.
     """
     campaign: Campaign | None = await session.scalar(
         select(Campaign)
@@ -273,8 +269,7 @@ async def discard_changes(
         stream.offers = sorted(kept_rows, key=lambda row: row.position)
         stream.has_unpushed_changes = False
     await session.flush()
-
-    return await sync_campaign(session, keitaro, campaign_id, now=now)
+    return campaign
 
 
 async def _load_editable_stream(session: AsyncSession, stream_id: int) -> Stream:
